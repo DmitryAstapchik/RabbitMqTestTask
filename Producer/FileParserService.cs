@@ -1,8 +1,11 @@
-﻿using Newtonsoft.Json;
+﻿using CsCodeGenerator;
+using CsCodeGenerator.Enums;
+using Newtonsoft.Json;
 using RabbitMQ.Client;
 using System;
 using System.Collections.Generic;
 using System.Configuration;
+using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -17,6 +20,7 @@ namespace Producer
         static readonly Random random = new();
         private System.Timers.Timer _timer;
         private Queue<string> _files;
+        const string GeneratedClassesDirectory = "GeneratedClasses";
         private static void ChangeModuleStateValues(string xmlFilePath)
         {
             XmlDocument doc = new();
@@ -58,7 +62,122 @@ namespace Producer
             Console.WriteLine($" [x] Sent {message}");
         }
 
-        internal void ReadXmlFiles(string directoryPath)
+        private static void GenerateClasses(string fromFile, string toDirectory = @$"..\..\..\{GeneratedClassesDirectory}")
+        {
+            ClearDirectory(toDirectory);
+            List<ClassModel> classes = new();
+            XmlDocument xmlDoc = new();
+            xmlDoc.Load(fromFile);
+            ParseNode(xmlDoc.DocumentElement);
+
+            CsGenerator csGenerator = new() { OutputDirectory = toDirectory };
+            foreach (var @class in classes)
+            {
+                if (!File.Exists(Path.Combine(toDirectory, $"{@class.Name}.cs")))
+                {
+                    FileModel file = new(@class.Name)
+                    {
+                        Namespace = $"Producer.{GeneratedClassesDirectory}",
+                    };
+                    file.Classes.Add(@class);
+                    csGenerator.Files.Add(file);
+                }
+            }
+            csGenerator.CreateFiles();
+
+            void ParseNode(XmlNode node)
+            {
+                if (node.InnerText != node.InnerXml)
+                {
+                    var @class = CreateClass(node.Name);
+                    foreach (XmlAttribute attr in node.Attributes)
+                    {
+                        AddFieldToClass(@class, new Field(BuiltInDataType.String, attr.LocalName));
+                    }
+                    if (node.ParentNode.ParentNode != null)
+                    {
+                        var parentClass = classes.Single(c => c.Name == node.ParentNode.Name);
+                        if (node.NextSibling?.Name == node.Name)
+                        {
+                            AddFieldToClass(parentClass, new Field($"List<{node.Name}>", node.Name));
+                        }
+                        else
+                        {
+                            AddFieldToClass(parentClass, new Field(node.Name, node.Name));
+                        }
+                    }
+                    foreach (XmlNode childNode in node.ChildNodes)
+                    {
+                        ParseNode(childNode);
+                    }
+                }
+                else
+                {
+                    var nodeText = node.InnerText;
+                    if (!string.IsNullOrEmpty(nodeText))
+                    {
+                        var parentClass = classes.Single(c => c.Name == node.ParentNode.Name);
+                        if (bool.TryParse(nodeText, out bool _))
+                        {
+                            AddFieldToClass(parentClass, new Field(BuiltInDataType.Bool, node.Name));
+                        }
+                        else if (int.TryParse(nodeText, out int _))
+                        {
+                            AddFieldToClass(parentClass, new Field(BuiltInDataType.Int, node.Name));
+                        }
+                        else if (double.TryParse(nodeText, NumberStyles.Float, CultureInfo.InvariantCulture, out double _))
+                        {
+                            AddFieldToClass(parentClass, new Field(BuiltInDataType.Double, node.Name));
+                        }
+                        else
+                        {
+                            AddFieldToClass(parentClass, new Field(BuiltInDataType.String, node.Name));
+                        }
+                    }
+                }
+            }
+
+            void AddFieldToClass(ClassModel @class, Field field)
+            {
+                if (!@class.Fields.Any(f => f.Name == field.Name))
+                {
+                    field.AccessModifier = AccessModifier.Public;
+                    @class.Fields.Add(field);
+                }
+            }
+
+            ClassModel CreateClass(string className)
+            {
+                if (!classes.Any(c => c.Name == className))
+                {
+                    ClassModel newClass = new(className);
+                    classes.Add(newClass);
+                    return newClass;
+                }
+                else
+                {
+                    return classes.Single(c => c.Name == className);
+                }
+            }
+
+            void ClearDirectory(string directory)
+            {
+                if (Directory.Exists(directory))
+                {
+                    DirectoryInfo di = new(directory);
+                    foreach (FileInfo file in di.GetFiles())
+                    {
+                        file.Delete();
+                    }
+                    foreach (DirectoryInfo dir in di.GetDirectories())
+                    {
+                        dir.Delete(true);
+                    }
+                }
+            }
+        }
+
+        internal void ParseXmlFiles(string directoryPath)
         {
             _timer = new(1000);
             _timer.Elapsed += OnTimedEvent;
@@ -73,6 +192,7 @@ namespace Producer
             {
                 new Thread(() =>
                 {
+                    GenerateClasses(file);
                     ChangeModuleStateValues(file);
                     var json = ConvertXmlToJson(file);
                     Send(json);

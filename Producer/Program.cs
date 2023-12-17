@@ -5,6 +5,6 @@ using Producer;
 var service = new FileParserService();
 string workingDirectory = Environment.CurrentDirectory;
 string projectDirectory = Directory.GetParent(workingDirectory).Parent.Parent.FullName;
-service.ReadXmlFiles(projectDirectory);
+service.ParseXmlFiles(projectDirectory);
 Console.WriteLine(" Press [enter] to exit.");
 Console.ReadLine();
